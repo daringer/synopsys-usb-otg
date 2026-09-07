@@ -496,14 +496,16 @@ impl<USB: UsbPeripheral> usb_device::bus::UsbBus for UsbBus<USB> {
             #[cfg(feature = "xcvrdly")]
             modify_reg!(otg_device, regs.device(), DCFG, XCVRDLY: 1);
 
-            // unmask EP interrupts
+            // unmask EP interrupts, cores >= 0x5000 signal the SETUP phase end via DOEPINT.STUP
             write_reg!(otg_device, regs.device(), DIEPMSK, XFRCM: 1);
+            let oepint = (core_id == 0x0000_5000) as u32;
+            write_reg!(otg_device, regs.device(), DOEPMSK, STUPM: oepint);
 
             // unmask core interrupts
             write_reg!(otg_global, regs.global(), GINTMSK,
                 USBRST: 1, ENUMDNEM: 1,
                 USBSUSPM: 1, WUIM: 1,
-                IEPINT: 1, RXFLVLM: 1
+                IEPINT: 1, OEPINT: oepint, RXFLVLM: 1
             );
 
             // clear pending interrupts
@@ -590,7 +592,7 @@ impl<USB: UsbPeripheral> usb_device::bus::UsbBus for UsbBus<USB> {
 
             let core_id = read_reg!(otg_global, regs.global(), CID);
 
-            let (wakeup, suspend, enum_done, reset, iep, rxflvl) = read_reg!(
+            let (wakeup, suspend, enum_done, reset, iep, oep, rxflvl) = read_reg!(
                 otg_global,
                 regs.global(),
                 GINTSTS,
@@ -599,6 +601,7 @@ impl<USB: UsbPeripheral> usb_device::bus::UsbBus for UsbBus<USB> {
                 ENUMDNE,
                 USBRST,
                 IEPINT,
+                OEPINT,
                 RXFLVL
             );
 
@@ -720,6 +723,13 @@ impl<USB: UsbPeripheral> usb_device::bus::UsbBus for UsbBus<USB> {
                                 let ep = regs.endpoint_out(epnum as usize);
                                 modify_reg!(endpoint_out, ep, DOEPCTL, CNAK: 1, EPENA: 1);
                             }
+
+                            // STM32N6-like cores (CID 0x5000) clear PKTCNT/STUPCNT, re-arm them
+                            if core_id == 0x0000_5000 {
+                                if let Some(ep) = &self.allocator.endpoints_out[epnum as usize] {
+                                    ep.rearm();
+                                }
+                            }
                         }
                         _ => {
                             read_reg!(otg_global, regs.global(), GRXSTSP); // pop GRXSTSP
@@ -747,6 +757,22 @@ impl<USB: UsbPeripheral> usb_device::bus::UsbBus for UsbBus<USB> {
                                     let ep = regs.endpoint_out(epnum as usize);
                                     modify_reg!(endpoint_out, ep, DOEPCTL, CNAK: 1, EPENA: 1);
                                 }
+                                if core_id == 0x0000_5000 && !is_setup {
+                                    ep.rearm();
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if oep != 0 {
+                    // SETUP phase done: the core disabled the endpoint, re-arm it for the OUT stage
+                    for ep in &self.allocator.endpoints_out {
+                        if let Some(ep) = ep {
+                            let ep_regs = regs.endpoint_out(ep.address().index());
+                            if read_reg!(endpoint_out, ep_regs, DOEPINT, STUP) != 0 {
+                                write_reg!(endpoint_out, ep_regs, DOEPINT, STUP: 1);
+                                ep.rearm();
                             }
                         }
                     }

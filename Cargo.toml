@@ -23,3 +23,8 @@ features = ['fs']
 hs = []
 fs = []
 xcvrdly = []
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("nosync", "rtfm"))'] }
+unused_imports = "allow"
+dead_code = "allow"

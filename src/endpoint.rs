@@ -174,7 +174,7 @@ impl EndpointOut {
             };
 
             let regs = self.usb.endpoint0_out();
-            write_reg!(endpoint0_out, regs, DOEPTSIZ0, STUPCNT: 1, PKTCNT: 1, XFRSIZ: self.descriptor.max_packet_size as u32);
+            write_reg!(endpoint0_out, regs, DOEPTSIZ0, STUPCNT: 3, PKTCNT: 1, XFRSIZ: self.descriptor.max_packet_size as u32);
             modify_reg!(endpoint0_out, regs, DOEPCTL0, MPSIZ: mpsiz as u32, EPENA: 1, CNAK: 1);
         } else {
             let regs = self.usb.endpoint_out(self.index() as usize);
@@ -186,6 +186,25 @@ impl EndpointOut {
                 EPTYP: self.descriptor.ep_type.to_bm_attributes() as u32,
                 MPSIZ: self.descriptor.max_packet_size as u32
             );
+        }
+    }
+
+    /// Re-enables a disabled OUT endpoint for one packet, cores >= 0x5000 disable it after every transfer.
+    pub fn rearm(&self) {
+        if self.index() == 0 {
+            let regs = self.usb.endpoint0_out();
+            if read_reg!(endpoint0_out, regs, DOEPCTL0, EPENA) != 0 {
+                return;
+            }
+            modify_reg!(endpoint0_out, regs, DOEPTSIZ0, STUPCNT: 3, PKTCNT: 1, XFRSIZ: self.descriptor.max_packet_size as u32);
+            modify_reg!(endpoint0_out, regs, DOEPCTL0, CNAK: 1, EPENA: 1);
+        } else {
+            let regs = self.usb.endpoint_out(self.index() as usize);
+            if read_reg!(endpoint_out, regs, DOEPCTL, EPENA) != 0 {
+                return;
+            }
+            modify_reg!(endpoint_out, regs, DOEPTSIZ, PKTCNT: 1, XFRSIZ: self.descriptor.max_packet_size as u32);
+            modify_reg!(endpoint_out, regs, DOEPCTL, CNAK: 1, EPENA: 1);
         }
     }
 
