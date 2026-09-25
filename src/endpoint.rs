@@ -9,15 +9,35 @@ use critical_section::{CriticalSection, Mutex};
 use usb_device::endpoint::EndpointAddress;
 use usb_device::{Result, UsbDirection, UsbError};
 
+/// D{I,O}EPCTL bits that are set-only or hardware-cleared: EPENA, EPDIS, SODDFRM,
+/// SD0PID_SEVNFRM, SNAK, CNAK. A read-modify-write must never write them back:
+/// writing EPENA=1 after the core cleared it re-enables the endpoint with a zero
+/// transfer size, which then answers every IN token with a zero-length packet.
+const EPCTL_TRIGGER_BITS: u32 = 0xFC00_0000;
+
 pub fn set_stalled(usb: UsbRegisters, address: EndpointAddress, stalled: bool) {
     critical_section::with(|_| match address.direction() {
         UsbDirection::Out => {
             let ep = usb.endpoint_out(address.index() as usize);
-            modify_reg!(endpoint_out, ep, DOEPCTL, STALL: stalled as u32);
+            let v = read_reg!(endpoint_out, ep, DOEPCTL) & !EPCTL_TRIGGER_BITS;
+            let stall = (stalled as u32) << endpoint_out::DOEPCTL::STALL::offset;
+            write_reg!(
+                endpoint_out,
+                ep,
+                DOEPCTL,
+                (v & !endpoint_out::DOEPCTL::STALL::mask) | stall
+            );
         }
         UsbDirection::In => {
             let ep = usb.endpoint_in(address.index() as usize);
-            modify_reg!(endpoint_in, ep, DIEPCTL, STALL: stalled as u32);
+            let v = read_reg!(endpoint_in, ep, DIEPCTL) & !EPCTL_TRIGGER_BITS;
+            let stall = (stalled as u32) << endpoint_in::DIEPCTL::STALL::offset;
+            write_reg!(
+                endpoint_in,
+                ep,
+                DIEPCTL,
+                (v & !endpoint_in::DIEPCTL::STALL::mask) | stall
+            );
         }
     })
 }
